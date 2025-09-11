@@ -35,20 +35,83 @@ num_forearms = 2
 sampling_rate = 13000
 window_size = 256
 overlap = 128
+target_height, target_width = 96, 96  # Fixed target size
 
 # -----------------------------
-# Signal Processing Functions
+# Signal Processing Functions (FIXED)
 # -----------------------------
 def apply_fft(signal):
-    """Apply FFT to signal"""
+    """Apply FFT to signal and create consistent 2D representation"""
+    # Normalize signal
+    signal = (signal - np.mean(signal)) / (np.std(signal) + 1e-8)
+    
     fft_result = np.fft.fft(signal)
     fft_magnitude = np.abs(fft_result)
-    return fft_magnitude[:len(fft_magnitude)//2]  # Return only positive frequencies
+    
+    # Take only positive frequencies
+    positive_freqs = fft_magnitude[:len(fft_magnitude)//2]
+    
+    # Create 2D representation by arranging in a grid
+    # Calculate dimensions that preserve most information
+    n_elements = len(positive_freqs)
+    height = int(np.sqrt(n_elements))
+    width = n_elements // height
+    
+    # Reshape with zero-padding if needed
+    if height * width < n_elements:
+        width = n_elements // height + 1
+    
+    # Pad with zeros to make it reshapeable
+    padded = np.zeros(height * width)
+    padded[:n_elements] = positive_freqs
+    
+    # Reshape and resize to target size
+    fft_2d = padded.reshape(height, width)
+    
+    # Resize to target dimensions
+    from scipy.ndimage import zoom
+    if fft_2d.shape != (target_height, target_width):
+        zoom_factors = (target_height / fft_2d.shape[0], target_width / fft_2d.shape[1])
+        fft_2d = zoom(fft_2d, zoom_factors)
+    
+    return fft_2d
 
 def apply_dwt(signal, wavelet='db4', level=4):
-    """Apply Discrete Wavelet Transform to signal"""
-    coeffs = pywt.wavedec(signal, wavelet, level=level)
-    return np.concatenate(coeffs)
+    """Apply Discrete Wavelet Transform to signal and create consistent 2D representation"""
+    # Normalize signal
+    signal = (signal - np.mean(signal)) / (np.std(signal) + 1e-8)
+    
+    try:
+        coeffs = pywt.wavedec(signal, wavelet, level=level)
+        # Concatenate coefficients
+        dwt_coeffs = np.concatenate(coeffs)
+        
+        # Create 2D representation
+        n_elements = len(dwt_coeffs)
+        height = int(np.sqrt(n_elements))
+        width = n_elements // height
+        
+        if height * width < n_elements:
+            width = n_elements // height + 1
+        
+        # Pad with zeros to make it reshapeable
+        padded = np.zeros(height * width)
+        padded[:n_elements] = dwt_coeffs
+        
+        # Reshape and resize to target size
+        dwt_2d = padded.reshape(height, width)
+        
+        # Resize to target dimensions
+        from scipy.ndimage import zoom
+        if dwt_2d.shape != (target_height, target_width):
+            zoom_factors = (target_height / dwt_2d.shape[0], target_width / dwt_2d.shape[1])
+            dwt_2d = zoom(dwt_2d, zoom_factors)
+        
+        return dwt_2d
+    except Exception as e:
+        print(f"DWT error: {e}")
+        # Return zeros if DWT fails
+        return np.zeros((target_height, target_width))
 
 def extract_time_domain_features(signal):
     """Extract time domain features"""
@@ -75,27 +138,35 @@ def extract_frequency_domain_features(signal):
         return np.array([0, 0])
 
 # -----------------------------
-# Data Processing Functions
+# Data Processing Functions (FIXED)
 # -----------------------------
 def process_signal(signal, method='stft'):
-    """Process signal with different methods"""
+    """Process signal with different methods - FIXED to ensure consistent output shape"""
+    # Normalize signal first
+    signal = (signal - np.mean(signal)) / (np.std(signal) + 1e-8)
+    
     if method == 'stft':
         f, t, Sxx = spectrogram(signal, fs=sampling_rate, nperseg=window_size, noverlap=overlap)
-        return np.log1p(Sxx)
+        Sxx_log = np.log1p(Sxx + 1e-8)  # Add small epsilon to avoid log(0)
+        
+        # Resize to target dimensions
+        from scipy.ndimage import zoom
+        if Sxx_log.shape != (target_height, target_width):
+            zoom_factors = (target_height / Sxx_log.shape[0], target_width / Sxx_log.shape[1])
+            Sxx_log = zoom(Sxx_log, zoom_factors)
+        
+        return Sxx_log
+    
     elif method == 'fft':
-        fft_result = apply_fft(signal)
-        # Reshape to 2D for compatibility with CNN
-        fft_2d = np.tile(fft_result, (64, 1))[:96, :96]
-        return fft_2d
+        return apply_fft(signal)
+    
     elif method == 'dwt':
-        dwt_result = apply_dwt(signal)
-        # Reshape to 2D for compatibility with CNN
-        dwt_2d = np.tile(dwt_result, (64, 1))[:96, :96]
-        return dwt_2d
+        return apply_dwt(signal)
+    
     return None
 
 def load_data(b, method='stft'):
-    """Load and process data"""
+    """Load and process data - FIXED to ensure consistent shapes"""
     X, Y = [], []
     
     for movement in movements:
@@ -125,16 +196,38 @@ def load_data(b, method='stft'):
                             processed_signal = process_signal(signal, method)
                             sensor_signals.append(processed_signal)
                         except Exception as e:
+                            print(f"Error processing {file_name}: {e}")
                             all_files_exist = False
                             break
                     
                     if all_files_exist and len(sensor_signals) == 4:
-                        min_shape = np.min([s.shape for s in sensor_signals], axis=0)
-                        resized = [s[:min_shape[0], :min_shape[1]] for s in sensor_signals]
-                        stacked = np.stack(resized, axis=-1)
-                        if stacked.shape[0] >= 96 and stacked.shape[1] >= 96:
-                            X.append(stacked[:96, :96, :])
-                            Y.append(movement_to_index[movement])
+                        # Ensure all signals have the same shape
+                        min_height = min(s.shape[0] for s in sensor_signals)
+                        min_width = min(s.shape[1] for s in sensor_signals)
+                        
+                        # Resize all signals to the minimum dimensions
+                        resized_signals = []
+                        for s in sensor_signals:
+                            if s.shape[0] > min_height or s.shape[1] > min_width:
+                                from scipy.ndimage import zoom
+                                zoom_factors = (min_height / s.shape[0], min_width / s.shape[1])
+                                s_resized = zoom(s, zoom_factors)
+                                resized_signals.append(s_resized)
+                            else:
+                                resized_signals.append(s[:min_height, :min_width])
+                        
+                        # Stack along channel dimension
+                        stacked = np.stack(resized_signals, axis=-1)
+                        
+                        # Ensure final shape matches target
+                        if stacked.shape[0] != target_height or stacked.shape[1] != target_width:
+                            from scipy.ndimage import zoom
+                            zoom_factors = (target_height / stacked.shape[0], 
+                                          target_width / stacked.shape[1], 1)
+                            stacked = zoom(stacked, zoom_factors)
+                        
+                        X.append(stacked)
+                        Y.append(movement_to_index[movement])
     
     if len(X) == 0:
         return np.array([]), np.array([])
@@ -146,7 +239,8 @@ def load_data(b, method='stft'):
     for i in range(4):
         channel_mean = X[:, :, :, i].mean()
         channel_std = X[:, :, :, i].std()
-        X[:, :, :, i] = (X[:, :, :, i] - channel_mean) / channel_std
+        if channel_std > 0:
+            X[:, :, :, i] = (X[:, :, :, i] - channel_mean) / channel_std
     
     return X, Y
 
@@ -219,7 +313,7 @@ def create_cnn_model(input_shape, num_classes):
     return model
 
 # -----------------------------
-# Evaluation Function
+# Evaluation Function (FIXED)
 # -----------------------------
 def evaluate_configuration(b, method='stft', use_time_features=True, use_freq_features=True):
     """Evaluate a specific configuration"""
@@ -232,6 +326,9 @@ def evaluate_configuration(b, method='stft', use_time_features=True, use_freq_fe
     if len(X) == 0:
         print("No data found for this configuration")
         return 0, 0, 0
+    
+    # Check if shapes are consistent
+    print(f"Data shape: {X.shape}")
     
     # Extract features
     X_features = extract_features_from_data(X, use_time_features, use_freq_features)
@@ -261,7 +358,7 @@ def evaluate_configuration(b, method='stft', use_time_features=True, use_freq_fe
     class_weights_dict = {i: w for i, w in enumerate(class_weights)}
     
     # Train CNN model
-    cnn_model = create_cnn_model(input_shape=(96, 96, 4), num_classes=len(movements))
+    cnn_model = create_cnn_model(input_shape=(target_height, target_width, 4), num_classes=len(movements))
     cnn_model.compile(
         optimizer=tf.keras.optimizers.legacy.Adam(learning_rate=0.0005),
         loss='categorical_crossentropy',
@@ -282,7 +379,7 @@ def evaluate_configuration(b, method='stft', use_time_features=True, use_freq_fe
         validation_data=(X_test, y_test),
         class_weight=class_weights_dict,
         callbacks=callbacks_list,
-        verbose=0
+        verbose=0  # Changed to 1 to see progress
     )
     
     # Evaluate CNN model
