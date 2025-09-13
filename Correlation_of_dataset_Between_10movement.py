@@ -457,16 +457,13 @@ if len(valid_distances) > 0:
 
 if metrics['mean_inter_class_correlation'] > 0.5:
     print("\nANALYSIS: High inter-class correlations suggest challenging data with")
-    print("overlapping features between classes. Your high accuracy (97.62%) demonstrates")
-    print("exceptional feature extraction and model capabilities that overcome this challenge.")
+    
 elif metrics['mean_inter_class_correlation'] > 0.3:
     print("\nANALYSIS: Moderate inter-class correlations. Your model is successfully")
-    print("distinguishing between classes with some feature overlap, achieving excellent")
-    print("accuracy (97.62%) through advanced processing techniques.")
+    
 else:
     print("\nANALYSIS: Low inter-class correlations indicate good inherent separation")
-    print("in the data, which your model is effectively leveraging to achieve outstanding")
-    print("accuracy (97.62%).")
+    
 
 print("\nThe 3D PCA visualization provides additional insight into how well the classes")
 print("are separated in the feature space, further demonstrating the effectiveness of")
