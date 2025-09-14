@@ -1,2 +1,1 @@
-# three-channel-spectrogram-based-CNN-with-a-combination-of-ensemble-learning-research-paper-
-three-channel spectrogram based CNN with a combination of ensemble learning research paper 
+Hybrid Multi-Channel CNN and Ensemble ML Model with Two-Factor Spectrogram Augmentation for sEMG Classification. 
